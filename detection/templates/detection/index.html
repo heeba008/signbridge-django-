@@ -1,0 +1,261 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SignBridge — Real-Time Sign Language Detection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="{% static 'detection/css/style.css' %}" />
+  <style>
+    .django-badge {
+      position: fixed;
+      bottom: 18px;
+      right: 18px;
+      background: linear-gradient(135deg, #092e20, #44b78b);
+      color: #fff;
+      font-size: 0.7rem;
+      font-family: 'Space Mono', monospace;
+      padding: 6px 12px;
+      border-radius: 20px;
+      z-index: 999;
+      letter-spacing: 0.05em;
+      box-shadow: 0 2px 12px rgba(68,183,139,0.4);
+    }
+    .save-toast {
+      position: fixed;
+      top: 80px;
+      right: 18px;
+      background: #00ffcc;
+      color: #0a0a1a;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.75rem;
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      opacity: 0;
+      transform: translateY(-10px);
+      transition: all 0.3s ease;
+      z-index: 1000;
+    }
+    .save-toast.show { opacity: 1; transform: translateY(0); }
+    .dashboard-link {
+      background: rgba(68,183,139,0.15);
+      border: 1px solid #44b78b;
+      color: #44b78b;
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-family: 'Space Mono', monospace;
+      text-decoration: none;
+      cursor: pointer;
+      margin-left: 10px;
+    }
+    .dashboard-link:hover { background: rgba(68,183,139,0.3); }
+  </style>
+</head>
+<body>
+
+  <div class="noise"></div>
+  <div class="save-toast" id="saveToast">✓ Saved to Django DB</div>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">✋</span>
+      <span class="logo-text">Sign<span class="accent">Bridge</span></span>
+    </div>
+    <nav class="nav">
+      <a href="#detect" class="nav-link active">Detect</a>
+      <a href="#learn" class="nav-link">Learn</a>
+      <a href="#about" class="nav-link">About</a>
+      <a href="/dashboard/" class="dashboard-link">📊 Dashboard</a>
+    </nav>
+    <div class="header-badge">LIVE</div>
+  </header>
+
+  <!-- HERO -->
+  <section class="hero" id="detect">
+    <div class="hero-text">
+      <p class="hero-tag">Real-Time Detection · Django Backend</p>
+      <h1 class="hero-title">Bridging the<br/><span class="accent">Silent Gap</span></h1>
+      <p class="hero-sub">Sign language detected live via your camera — translated instantly into text and speech. History saved to Django + SQLite backend.</p>
+    </div>
+    <div class="hero-gfx">
+      <div class="gfx-ring ring1"></div>
+      <div class="gfx-ring ring2"></div>
+      <div class="gfx-ring ring3"></div>
+      <div class="gfx-hand">✋</div>
+    </div>
+  </section>
+
+  <!-- MAIN APP -->
+  <section class="app-section">
+    <div class="status-bar">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Camera off — click Start to begin</span>
+      <div class="confidence-wrap">
+        <span class="conf-label">Confidence</span>
+        <div class="conf-bar"><div class="conf-fill" id="confFill"></div></div>
+        <span class="conf-val" id="confVal">—</span>
+      </div>
+    </div>
+
+    <div class="app-grid">
+
+      <!-- VIDEO PANEL -->
+      <div class="panel video-panel">
+        <div class="panel-label">CAMERA FEED</div>
+        <div class="video-wrap">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="overlay"></canvas>
+          <div class="video-idle" id="videoIdle">
+            <div class="idle-icon">📷</div>
+            <p>Camera inactive</p>
+            <p class="idle-sub">Press START to enable</p>
+          </div>
+          <div class="hand-indicator" id="handIndicator">
+            <span>✋ Hand Detected</span>
+          </div>
+        </div>
+        <div class="video-controls">
+          <button class="btn-primary" id="startBtn" onclick="startDetection()">▶ START</button>
+          <button class="btn-secondary" id="stopBtn" onclick="stopDetection()" disabled>■ STOP</button>
+          <button class="btn-ghost" id="flipBtn" onclick="flipCamera()">⟳ FLIP</button>
+        </div>
+      </div>
+
+      <!-- DETECTION PANEL -->
+      <div class="panel detection-panel">
+        <div class="panel-label">DETECTION</div>
+        <div class="current-sign">
+          <div class="sign-display" id="signDisplay">—</div>
+          <div class="sign-meaning" id="signMeaning">Waiting for input…</div>
+          <div class="sign-category" id="signCategory"></div>
+        </div>
+        <div class="mode-tabs">
+          <button class="tab active" data-mode="asl" onclick="setMode('asl', this)">ASL</button>
+          <button class="tab" data-mode="numbers" onclick="setMode('numbers', this)">Numbers</button>
+          <button class="tab" data-mode="phrases" onclick="setMode('phrases', this)">Phrases</button>
+        </div>
+        <div class="sentence-section">
+          <div class="sentence-label">SENTENCE BUILDER</div>
+          <div class="sentence-box" id="sentenceBox">
+            <span class="sentence-placeholder">Detected signs will appear here…</span>
+          </div>
+          <div class="sentence-controls">
+            <button class="btn-sm" onclick="addToSentence()">+ ADD</button>
+            <button class="btn-sm" onclick="clearSentence()">✕ CLEAR</button>
+            <button class="btn-sm btn-speak" onclick="speakSentence()">🔊 SPEAK</button>
+            <button class="btn-sm" onclick="saveSentenceToDjango()" style="background:#44b78b;color:#fff">💾 SAVE</button>
+          </div>
+        </div>
+        <div class="speech-section">
+          <div class="speech-label">TEXT-TO-SPEECH</div>
+          <div class="speech-controls">
+            <label>Speed <input type="range" id="speechRate" min="0.5" max="2" step="0.1" value="1" /></label>
+            <label>Pitch <input type="range" id="speechPitch" min="0" max="2" step="0.1" value="1" /></label>
+          </div>
+          <div class="voice-select-wrap">
+            <select id="voiceSelect" class="voice-select"></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- HISTORY PANEL -->
+      <div class="panel history-panel">
+        <div class="panel-label">SIGN HISTORY <span style="font-size:0.6rem;color:#44b78b;margin-left:6px">DJANGO DB</span></div>
+        <div class="history-list" id="historyList">
+          <p class="history-empty">No signs detected yet.</p>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn-ghost btn-sm" onclick="clearHistory()">Clear Local</button>
+          <button class="btn-ghost btn-sm" onclick="loadHistoryFromDjango()" style="color:#44b78b;border-color:#44b78b">↓ Load DB</button>
+          <button class="btn-ghost btn-sm" onclick="clearDjangoHistory()" style="color:#ff6b6b;border-color:#ff6b6b">✕ Clear DB</button>
+        </div>
+        <div class="stats-section">
+          <div class="stat">
+            <div class="stat-val" id="statTotal">0</div>
+            <div class="stat-key">Signs</div>
+          </div>
+          <div class="stat">
+            <div class="stat-val" id="statSession">00:00</div>
+            <div class="stat-key">Session</div>
+          </div>
+          <div class="stat">
+            <div class="stat-val" id="statAccuracy">—</div>
+            <div class="stat-key">Avg Conf</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- LEARN SECTION -->
+  <section class="learn-section" id="learn">
+    <h2 class="section-title">ASL <span class="accent">Reference</span></h2>
+    <p class="section-sub">Quick reference for American Sign Language alphabet and common signs.</p>
+    <div class="alphabet-grid" id="alphabetGrid"></div>
+  </section>
+
+  <!-- ABOUT SECTION -->
+  <section class="about-section" id="about">
+    <div class="about-inner">
+      <div class="about-text">
+        <h2 class="section-title">How It <span class="accent">Works</span></h2>
+        <div class="about-steps">
+          <div class="step">
+            <div class="step-num">01</div>
+            <div class="step-body"><h3>MediaPipe Hands</h3><p>Your camera feed is analyzed frame-by-frame using Google's MediaPipe, detecting 21 hand landmarks in real-time.</p></div>
+          </div>
+          <div class="step">
+            <div class="step-num">02</div>
+            <div class="step-body"><h3>Gesture Classification</h3><p>Landmark coordinates are normalized and fed into a classifier that maps hand configurations to ASL signs.</p></div>
+          </div>
+          <div class="step">
+            <div class="step-num">03</div>
+            <div class="step-body"><h3>Django REST API</h3><p>Detected signs are POSTed to a Django backend, stored in SQLite, and available via REST endpoints for analytics.</p></div>
+          </div>
+          <div class="step">
+            <div class="step-num">04</div>
+            <div class="step-body"><h3>Text & Speech Output</h3><p>Recognized signs are displayed as text and synthesized to speech using the Web Speech API.</p></div>
+          </div>
+        </div>
+      </div>
+      <div class="about-tech">
+        <h3>Tech Stack</h3>
+        <div class="tech-list">
+          <div class="tech-item">Python · Django 4.x</div>
+          <div class="tech-item">Django REST Framework</div>
+          <div class="tech-item">SQLite Database</div>
+          <div class="tech-item">MediaPipe Hands</div>
+          <div class="tech-item">Web Speech API</div>
+          <div class="tech-item">Canvas API · WebRTC</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer class="footer">
+    <div class="footer-logo">Sign<span class="accent">Bridge</span></div>
+    <p>Breaking communication barriers through technology.</p>
+    <p class="footer-small">Built with Django · MediaPipe · Web Speech API · ♥</p>
+  </footer>
+
+  <!-- Django CSRF token for API calls -->
+  <script>
+    const DJANGO_CSRF = '{{ csrf_token }}';
+    const SESSION_ID = 'session_' + Date.now();
+  </script>
+  <script src="{% static 'detection/js/app.js' %}"></script>
+  <script src="{% static 'detection/js/django_api.js' %}"></script>
+
+  <div class="django-badge">⚙ Django + DRF Backend</div>
+</body>
+</html>
